@@ -1,0 +1,98 @@
+# ai-stack: supermemory + ollama + jev (tev1 decision API), all Linux containers, NVIDIA GPU.
+# Up:    docker compose up -d --build
+# Key:   docker compose logs supermemory | grep -i "api key"
+# Test:  curl http://localhost:6767/v3/health
+
+services:
+  ollama:
+    image: ollama/ollama:latest
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+    # Host Ollama already owns 11434; use 11435 for host access to this one.
+    ports:
+      - "127.0.0.1:11435:11434"
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    environment:
+      OLLAMA_KEEP_ALIVE: 24h        # keep both models resident in VRAM
+      OLLAMA_MAX_LOADED_MODELS: "2" # gemma4 (supermemory) + tev1 (jev)
+    # NVIDIA GPU: needs Docker Desktop WSL2 backend + current NVIDIA driver.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  ollama-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      ollama:
+        condition: service_healthy
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint:
+      - /bin/sh
+      - -c
+      - ollama pull ${SM_MODEL:-gemma4:e4b-it-qat} && ollama pull ${JEV_MODEL:-tev1:4b}
+    restart: "no"
+
+  supermemory:
+    build:
+      context: ./supermemory
+      args:
+        SUPERMEMORY_VERSION: ${SUPERMEMORY_VERSION:-0.0.8}
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
+    environment:
+      OPENAI_BASE_URL: http://ollama:11434/v1
+      OPENAI_API_KEY: ollama          # Ollama ignores it; the SDK requires it
+      OPENAI_MODEL: ${SM_MODEL:-gemma4:e4b-it-qat}
+      OPENAI_FAST_MODEL: ${SM_MODEL:-gemma4:e4b-it-qat}
+      OPENAI_TEXT_MODEL: ${SM_MODEL:-gemma4:e4b-it-qat}
+    volumes:
+      - sm-data:/data
+    # Server binds 0.0.0.0 inside the container and has no host flag.
+    # Publishing on 127.0.0.1 only keeps it off the LAN.
+    ports:
+      - "127.0.0.1:6767:6767"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:6767/v3/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  jev:
+    build: ./jev
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+      ollama-pull:
+        condition: service_completed_successfully
+    environment:
+      OLLAMA_URL: http://ollama:11434
+      JEV_MODEL: ${JEV_MODEL:-tev1:4b}
+      JEV_KEEP_ALIVE: 24h
+    ports:
+      - "127.0.0.1:8765:8765"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://localhost:8765/health', timeout=4)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+volumes:
+  ollama:
+  sm-data:
