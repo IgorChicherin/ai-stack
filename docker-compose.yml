@@ -1,4 +1,7 @@
-# ai-stack: supermemory + ollama + jev (tev1 decision API), all Linux containers, NVIDIA GPU.
+# ai-stack: supermemory + ollama + jev (tev1 decision API), all Linux containers.
+# The base file runs Ollama on the CPU. Add an override for your platform (docs/platforms.md):
+#   NVIDIA GPU (Windows/WSL2, Linux): -f docker-compose.nvidia.yml
+#   Ollama running on the host (macOS Metal, any OS): -f docker-compose.host-ollama.yml
 # Up:    docker compose up -d --build
 # Key:   docker compose logs supermemory | grep -i "api key"
 # Test:  curl http://localhost:6767/v3/health
@@ -20,14 +23,7 @@ services:
     environment:
       OLLAMA_KEEP_ALIVE: 24h        # keep both models resident in VRAM
       OLLAMA_MAX_LOADED_MODELS: "2" # gemma4 (supermemory) + tev1 (jev)
-    # NVIDIA GPU: needs Docker Desktop WSL2 backend + current NVIDIA driver.
-    deploy:
-      resources:
-        reservations:
-          devices:
-            - driver: nvidia
-              count: all
-              capabilities: [gpu]
+    # GPU access is added by docker-compose.nvidia.yml (see docs/platforms.md).
 
   ollama-pull:
     image: ollama/ollama:latest
@@ -54,7 +50,7 @@ services:
       ollama-pull:
         condition: service_completed_successfully
     environment:
-      OPENAI_BASE_URL: http://ollama:11434/v1
+      OPENAI_BASE_URL: ${OLLAMA_URL:-http://ollama:11434}/v1
       OPENAI_API_KEY: ollama          # Ollama ignores it; the SDK requires it
       OPENAI_MODEL: ${SM_MODEL:-gemma4:e4b-it-qat}
       OPENAI_FAST_MODEL: ${SM_MODEL:-gemma4:e4b-it-qat}
@@ -81,7 +77,7 @@ services:
       ollama-pull:
         condition: service_completed_successfully
     environment:
-      OLLAMA_URL: http://ollama:11434
+      OLLAMA_URL: ${OLLAMA_URL:-http://ollama:11434}
       JEV_MODEL: ${JEV_MODEL:-tev1:4b}
       JEV_KEEP_ALIVE: 24h
     ports:

@@ -1,0 +1,27 @@
+# Use an Ollama that runs on the host instead of the containerized one.
+# Typical case: macOS, where Docker containers cannot use the Apple GPU (Metal) but
+# the native Ollama app can. Works on any OS. Needs Docker Compose 2.24 or newer (!reset).
+#
+# Host setup: install Ollama 0.35+, start it, and pull the models yourself:
+#   ollama pull gemma4:e4b-it-qat && ollama pull tev1:4b
+# Use:  docker compose -f docker-compose.yml -f docker-compose.host-ollama.yml up -d
+#
+# The containerized ollama and ollama-pull are moved into a profile that is never
+# enabled, so they do not start. Set HOST_OLLAMA_URL in .env if Ollama listens elsewhere.
+services:
+  ollama:
+    profiles: ["container-ollama"]
+  ollama-pull:
+    profiles: ["container-ollama"]
+  supermemory:
+    depends_on: !reset {}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      OPENAI_BASE_URL: ${HOST_OLLAMA_URL:-http://host.docker.internal:11434}/v1
+  jev:
+    depends_on: !reset {}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      OLLAMA_URL: ${HOST_OLLAMA_URL:-http://host.docker.internal:11434}

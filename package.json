@@ -1,0 +1,12 @@
+{
+  "name": "ai-stack",
+  "private": true,
+  "description": "Local AI stack (ollama, supermemory, jev) and agent config installer",
+  "scripts": {
+    "install-configs": "node scripts/install-configs.js",
+    "install-configs:dry": "node scripts/install-configs.js --dry-run"
+  },
+  "dependencies": {
+    "jsonc-parser": "^3.3.1"
+  }
+}

@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"$CLAUDE_PROJECT_DIR/hooks/claude-jev-guard.js\"",
+            "command": "node \"{{CLAUDE_DIR}}/hooks/jev-guard/claude-jev-guard.js\"",
             "timeout": 30
           }
         ]

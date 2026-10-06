@@ -1,18 +1,22 @@
 # ai-stack
 
-Локальный стек в Linux-контейнерах (Docker Desktop, WSL2, NVIDIA GPU):
+**English** · [Русский](README.ru.md)
 
-| Сервис | Что делает | Порт на хосте |
+A local stack in Linux containers for Windows, Linux and macOS:
+
+| Service | What it does | Host port |
 |---|---|---|
-| `ollama` | Запускает модели на GPU | `127.0.0.1:11435` |
-| `ollama-pull` | Одноразово скачивает модели | нет |
-| `supermemory` | Долговременная память: хранит документы, извлекает факты, ищет | `127.0.0.1:6767` |
-| `jev` | Локальный аналог Jev: быстрые решения «выбери / да-нет / оцени» на модели Tev1; MCP + REST | `127.0.0.1:8765` |
+| `ollama` | Runs the models (on the GPU when available) | `127.0.0.1:11435` |
+| `ollama-pull` | Downloads the models once | none |
+| `supermemory` | Long-term memory: stores documents, extracts facts, searches them | `127.0.0.1:6767` |
+| `jev` | A local counterpart of Jev: fast "pick one / yes-no / rate" decisions on the Tev1 model, served over MCP and REST | `127.0.0.1:8765` |
 
-Клиенты: **opencode** и **Claude Code** подключаются к одним и тем же контейнерам.
+Clients: **opencode** and **Claude Code** connect to the same containers.
+
+**Platforms.** The stack runs on Windows, Linux and macOS. What differs is how Ollama gets the GPU (NVIDIA inside the container on Windows and Linux, native Ollama with Metal on macOS) and where the config files live. Linux and macOS instructions: [`docs/platforms.md`](docs/platforms.md) (Russian: [`docs/platforms.ru.md`](docs/platforms.ru.md)). Commands below are for Windows PowerShell unless stated otherwise.
 
 ```
- opencode ──plugin──┐                       ┌──> gemma4:e4b-it-qat  (извлечение фактов)
+ opencode ──plugin──┐                       ┌──> gemma4:e4b-it-qat  (fact extraction)
                     ├─> supermemory :6767 ──┤
  Claude Code ─hooks─┘        (OpenAI API)   └──> ollama :11434 ──> GPU
                                                     ^
@@ -21,31 +25,31 @@
 
 ---
 
-## Для чего нужен jev и как им пользоваться
+## What jev is for and how to use it
 
-### Что это
+### What it is
 
-`jev` даёт агенту (opencode, Claude Code) быстрый «рефлекс»: на короткий вопрос о тексте он отвечает **вероятностями**, а не рассуждением. Под капотом модель Tev1 (4B, на GPU), которую обучили выбирать вариант из списка. Она не генерирует текст, а за один проход выдаёт распределение по вариантам. Поэтому ответ приходит за доли секунды (около 0.7 с, когда модель уже в VRAM), стоит ноль токенов облачной модели и даёт число, по которому можно ветвить логику.
+`jev` gives an agent (opencode, Claude Code) a fast "reflex": for a short question about a text it answers with **probabilities**, not with reasoning. Under the hood is Tev1 (4B, on the GPU), a model trained to choose one option from a list. It does not generate text; in a single pass it returns a distribution over the options. So the answer arrives in a fraction of a second (about 0.7 s once the model is in VRAM), costs zero cloud-model tokens, and gives a number you can branch on.
 
-Это локальный аналог закрытой модели Jev от TypeSafe: тот же класс задач (маршрутизация, проверка по правилу, оценка по шкале), но на твоей машине.
+It is a local counterpart of the closed Jev model from TypeSafe: the same class of tasks (routing, rule checks, rating on a scale), but on your own machine.
 
-### Когда использовать
+### When to use it
 
-| Задача | Вопрос к jev | Инструмент |
+| Task | Question to jev | Tool |
 |---|---|---|
-| Разобрать входящий запрос | «Это баг, фича или вопрос?» | `classify` |
-| Выбрать, какой агент или модель нужны | «Простая правка или многофайловый рефакторинг?» | `classify` |
-| Проверить факт или правило | «Меняет ли этот diff публичный API?», «Есть ли в тексте секрет?» | `check` |
-| Оценить качество | «Насколько понятно это сообщение коммита?» | `score` |
-| Несколько проверок сразу | до 64 вопросов к одному тексту за один вызов | `decide` |
+| Triage an incoming request | "Is this a bug, a feature or a question?" | `classify` |
+| Pick which agent or model is needed | "Simple edit or multi-file refactoring?" | `classify` |
+| Check a fact or a rule | "Does this diff change the public API?", "Does the text contain a secret?" | `check` |
+| Rate quality | "How clear is this commit message?" | `score` |
+| Several checks at once | up to 64 questions about one text in a single call | `decide` |
 
-Не подходит для: генерации текста, длинных рассуждений, текстов длиннее около 5000 символов (обрезаются, контекст модели около 2000 токенов), решений с необратимыми последствиями (удаление, деплой, коммит). Точность Tev1 4B на независимом бенчмарке около 73%, то есть ошибается примерно в четверти случаев. Используй `jev` как быстрый фильтр, а не как судью.
+Not suitable for: generating text, long reasoning, texts longer than about 5000 characters (they are truncated; the model context is about 2000 tokens), and decisions with irreversible consequences (delete, deploy, commit). The accuracy of Tev1 4B on an independent benchmark is about 73%, so it is wrong in roughly a quarter of cases. Use `jev` as a fast filter, not as a judge.
 
-### Инструменты
+### Tools
 
-Все четыре доступны агенту как MCP-инструменты (`mcp__jev__<имя>` в Claude Code, `jev_<имя>` в opencode).
+All four are available to the agent as MCP tools (`mcp__jev__<name>` in Claude Code, `jev_<name>` in opencode).
 
-**`classify(text, instructions, options)`** — выбрать один вариант. `options` это словарь «имя: описание». Модель опирается на описания, поэтому пиши их конкретно.
+**`classify(text, instructions, options)`** picks one option. `options` is a dictionary "name: description". The model relies on the descriptions, so write them concretely.
 
 ```json
 {
@@ -59,13 +63,13 @@
 }
 ```
 
-Ответ: `choice` (победитель), `probabilities` (по каждому варианту), `confidence`.
+Answer: `choice` (the winner), `probabilities` (per option), `confidence`.
 
-**`check(text, question)`** — вопрос «да/нет». Ответ: `noul`, вероятность «да» от 0 до 1. Порог выбирай сам. Для безопасности ставь низкий (например, `> 0.3` считать подозрительным), для автоматического действия высокий.
+**`check(text, question)`** is a yes/no question. Answer: `noul`, the probability of "yes" from 0 to 1. You choose the threshold. For safety checks use a low one (for example, treat `> 0.3` as suspicious); for an automatic action use a high one.
 
-**`score(text, instructions, levels)`** — оценка по шкале. `levels` это упорядоченный список описаний от худшего к лучшему. Ответ: `score` (ожидаемый индекс уровня, от 0 до `len(levels)-1`), `probabilities` по уровням, `legend`, `confidence`.
+**`score(text, instructions, levels)`** rates the text on a scale. `levels` is an ordered list of descriptions from worst to best. Answer: `score` (the expected level index, from 0 to `len(levels)-1`), `probabilities` per level, `legend`, `confidence`.
 
-**`decide(text, questions)`** — сырой пакетный вызов, до 64 вопросов, формат как у REST (`/v1/decide`). Один и тот же текст обрабатывается один раз, поэтому это дешевле, чем много отдельных вызовов.
+**`decide(text, questions)`** is the raw batch call: up to 64 questions, in the same format as REST (`/v1/decide`). The text is processed once, so it is cheaper than many separate calls.
 
 ```json
 {
@@ -79,12 +83,12 @@
 }
 ```
 
-Реальный ответ на этот пример: `risky.noul = 0.97`, `quality.score = 0.73` (в основном «Works but poor»).
+Real answer for this example: `risky.noul = 0.97`, `quality.score = 0.73` (mostly "Works but poor").
 
-### Как пользоваться на проекте
+### How to use it in a project
 
-1. **Попроси агента напрямую.** Например: «прогони этот diff через `check` с вопросом "меняет ли публичный API"», или «классифицируй эти 20 тикетов через `classify` на bug/feature/question».
-2. **Закрепи правила в инструкциях проекта**, чтобы агент звал `jev` сам. Агент сам не знает, когда это полезно. Все инструкции для агентов пишутся **на английском** (так надёжнее работают и модель, и `jev`). Пример для `AGENTS.md` (opencode) или `CLAUDE.md` (Claude Code), готовая версия лежит в `AGENTS.md` этого проекта:
+1. **Ask the agent directly.** For example: "run this diff through `check` with the question 'does it change the public API'", or "classify these 20 tickets with `classify` into bug/feature/question".
+2. **Put rules in the project instructions** so the agent calls `jev` by itself. The agent does not know on its own when it is useful. All instructions for agents are written **in English** (both the model and `jev` work more reliably). Example for `AGENTS.md` (opencode) or `CLAUDE.md` (Claude Code); a ready version lives in `global/AGENTS.md`:
 
    ```markdown
    ## jev (local classifier)
@@ -92,176 +96,205 @@
    - Classify unlabeled tasks with `classify` (bug / feature / question / chore).
    - A jev answer is a hint. Never make an irreversible decision from it without user confirmation.
    ```
-   Проверка секретов перед коммитом в правилах не нужна: её делает hook (см. ниже).
-3. **Вызывай из скриптов и CI** по REST: `POST http://localhost:8765/v1/decide` с телом `{"state": "...", "questions": {...}}` (формат Ollama `/v1/systemone`). Подходит для хуков git, фильтров логов, триажа.
-4. **Пиши хорошие описания вариантов.** Качество зависит от них сильнее, чем от формулировки вопроса. Вместо `"bug"` пиши `"bug": "reports broken or crashing behavior"`. Для безопасности и политик предпочитай `check` с чётким критерием.
-5. **Держи текст коротким.** Отправляй diff, сообщение или один абзац, а не файл целиком.
+   A secret check before commits is not needed in the rules: the hook does it (see below).
+3. **Call it from scripts and CI** over REST: `POST http://localhost:8765/v1/decide` with the body `{"state": "...", "questions": {...}}` (the Ollama `/v1/systemone` format). Good for git hooks, log filters and triage.
+4. **Write good option descriptions.** Quality depends on them more than on how the question is phrased. Instead of `"bug"` write `"bug": "reports broken or crashing behavior"`. For security and policy checks prefer `check` with a clear criterion.
+5. **Keep the text short.** Send a diff, a message or one paragraph, not a whole file.
 
-Инструменты `jev` **сами не вызываются**: это обычные MCP-инструменты, и модель решает, звать ли их. Автоматически работает только защита коммитов, см. следующий раздел.
+The `jev` tools **are not called automatically**: they are ordinary MCP tools and the model decides whether to call them. Only commit protection runs automatically, see the next section.
 
-### Что вызывается автоматически: защита коммитов (jev-guard)
+### What runs automatically: commit protection (jev-guard)
 
-Перед каждым `git commit` срабатывает hook, который проверяет, что коммитится, на секреты (ключи, токены, пароли, приватные ключи). Он есть в проекте для обоих клиентов.
+Before every `git commit` a hook checks what is being committed for secrets (keys, tokens, passwords, private keys). It exists for both clients.
 
-**Как проверяется.** Из `git diff` берутся только добавленные строки (`git diff --cached`, а при `commit -a`/`-am` `git diff HEAD`). Дальше две независимые проверки:
+**How it checks.** Only the added lines of the diff are taken (`git diff --cached`, and `git diff HEAD` for `commit -a`/`-am`). Then two independent checks run:
 
-1. **Шаблоны (регулярные выражения)**: блок `PRIVATE KEY`, ключ AWS (`AKIA...`), токены GitHub, ключи вида `sk-...` и `sm_...`, токены Slack, присваивания вида `password = "..."`. Детерминированно, работает без сети.
-2. **`jev`**: вопрос `noul` «содержит ли текст настоящий секрет?» по кускам диффа (до 3500 символов, максимум 8 кусков, параллельно). Находит то, что шаблоны не знают. Порог `0.5`.
+1. **Patterns (regular expressions)**: a `PRIVATE KEY` block, an AWS key (`AKIA...`), GitHub tokens, keys like `sk-...` and `sm_...`, Slack tokens, assignments like `password = "..."`. Deterministic, works without a network.
+2. **`jev`**: a `noul` question "does the text contain a real secret?" for chunks of the diff (up to 3500 characters each, at most 8 chunks, in parallel). It finds what the patterns do not know. Threshold `0.5`.
 
-Если сработала любая проверка, коммит не проходит молча:
+If either check fires, the commit does not pass silently:
 
-| Клиент | Что происходит |
+| Client | What happens |
 |---|---|
-| Claude Code | Запрос подтверждения (`permissionDecision: ask`) с причинами. Пользователь решает: разрешить или отклонить. |
-| opencode | Вызов `bash` блокируется ошибкой `jev-guard blocked this commit`. Агент должен показать строки и спросить пользователя (у opencode нет режима «спросить» в этом хуке). |
+| Claude Code | A confirmation prompt (`permissionDecision: ask`) with the reasons. The user decides: allow or reject. |
+| opencode | The `bash` call is blocked with the error `jev-guard blocked this commit`. The agent must show the lines and ask the user (opencode has no "ask" mode in this hook). |
 
-Если `jev` недоступен (контейнер остановлен, таймаут 20 с), проверка шаблонами всё равно выполняется, а в ответе будет предупреждение `jev unavailable`. Работа из-за остановленного `jev` не блокируется.
+If `jev` is unavailable (the container is stopped, 20 s timeout), the pattern check still runs and the answer carries a `jev unavailable` warning. Work is not blocked because `jev` is stopped.
 
-**Файлы:**
+**Files:**
 
-| Файл | Роль |
+| File | Role |
 |---|---|
-| `hooks/jev-guard-core.js` | общая логика: разбор команды, дифф, шаблоны, вызов `jev` |
-| `hooks/claude-jev-guard.js` | hook Claude Code (`PreToolUse`, matcher `Bash`) |
-| `hooks/opencode-jev-guard.js` | плагин opencode (`tool.execute.before`) |
-| `.claude/settings.json` | подключает hook в Claude Code для этого проекта |
-| `opencode.json` | подключает плагин в opencode для этого проекта |
-| `AGENTS.md` / `CLAUDE.md` | правила для агента: когда звать `jev` (`CLAUDE.md` просто включает `AGENTS.md`) |
+| `hooks/jev-guard-core.js` | shared logic: command parsing, diff, patterns, the `jev` call |
+| `hooks/claude-jev-guard.js` | Claude Code hook (`PreToolUse`, matcher `Bash`) |
+| `hooks/opencode-jev-guard.js` | opencode plugin (`tool.execute.before`) |
+| `config/claude/settings.json`, `config/opencode/opencode.jsonc` | settings fragments that the installer merges into the clients' global configs |
+| `global/AGENTS.md` | global rules for agents: when to call `jev`, commit protection, memory, language |
+| `scripts/install-configs.js` | installer: copies the hooks and merges settings (see below) |
+| `AGENTS.md` / `CLAUDE.md` | rules only for working on `ai-stack` itself (`CLAUDE.md` includes `AGENTS.md`) |
 
-**Настройка (переменные окружения):**
+**Settings (environment variables):**
 
-| Переменная | По умолчанию | Смысл |
+| Variable | Default | Meaning |
 |---|---|---|
-| `JEV_URL` | `http://localhost:8765` | адрес сервиса `jev` |
-| `JEV_GUARD_THRESHOLD` | `0.5` | порог вероятности от `jev`. Ниже строже, `2` отключает проверку через `jev`, шаблоны остаются |
-| `JEV_GUARD_CHUNK_CHARS` | `3500` | размер куска диффа |
-| `JEV_GUARD_MAX_CHUNKS` | `8` | сколько кусков проверять через `jev` |
-| `JEV_GUARD_TIMEOUT_MS` | `20000` | таймаут запроса к `jev` |
+| `JEV_URL` | `http://localhost:8765` | address of the `jev` service |
+| `JEV_GUARD_THRESHOLD` | `0.5` | probability threshold from `jev`. Lower is stricter; `2` turns off the `jev` check and keeps the patterns |
+| `JEV_GUARD_CHUNK_CHARS` | `3500` | diff chunk size |
+| `JEV_GUARD_MAX_CHUNKS` | `8` | how many chunks to check with `jev` |
+| `JEV_GUARD_TIMEOUT_MS` | `20000` | timeout of a request to `jev` |
 
-**Проверено на тестовом репозитории:** безобидный коммит проходит; ключ AWS даёт запрос (`jev` 89%); `password = "hunter2hunter2"` даёт запрос (`jev` 71%); `git commit -am` видит незакоммиченные правки; при остановленном `jev` приходит предупреждение, а не ошибка; команды, не связанные с коммитом, не затрагиваются.
+**Tested on a test repository:** a harmless commit passes; an AWS key gives a prompt (`jev` 89%); `password = "hunter2hunter2"` gives a prompt (`jev` 71%); `git commit -am` sees uncommitted edits; with `jev` stopped a warning comes, not an error; commands unrelated to commits are not affected.
 
-**Ограничения.** Точность `jev` около 73%: возможны ложные срабатывания на тестовых данных и документации (тогда подтверди коммит) и пропуски нетипичных секретов. Хук смотрит только на добавленные строки и не ищет секреты в истории. Он срабатывает на команду `git commit` в `bash`, а не на `git` из других инструментов.
+**Limitations.** `jev` accuracy is about 73%: false alarms on test data and documentation are possible (then confirm the commit), and unusual secrets can be missed. The hook looks only at added lines and does not search history. It fires on the `git commit` command in `bash`, not on `git` run from other tools.
 
-**Включить для всех проектов:**
+**Install for all projects (config installer).** The script copies files into the clients' folders and merges the settings from the repository files with yours. After installation the repository can be moved: no paths to it are written.
 
-- Claude Code: перенеси блок `hooks` из `.claude/settings.json` в `~/.claude/settings.json` и укажи полный путь: `node "C:/Users/r00t/Work/ai-stack/hooks/claude-jev-guard.js"`.
-- opencode: добавь в `plugin` в `~/.config/opencode/opencode.jsonc` путь `file:///C:/Users/r00t/Work/ai-stack/hooks/opencode-jev-guard.js`.
-- Правила из `AGENTS.md` скопируй в `~/.claude/CLAUDE.md` и `~/.config/opencode/AGENTS.md`.
+```powershell
+cd ai-stack
+npm install                                  # once: jsonc-parser
+node scripts/install-configs.js --dry-run    # show what would change
+node scripts/install-configs.js              # install
+```
+
+What `scripts/install-configs.js` does (safe to re-run; the second run changes nothing):
+
+| Step | Source in the repository | Destination |
+|---|---|---|
+| Copies the hook | `hooks/jev-guard-core.js`, `hooks/claude-jev-guard.js` | `~/.claude/hooks/jev-guard/` |
+| Copies the plugin | `hooks/jev-guard-core.js`, `hooks/opencode-jev-guard.js` | `~/.config/opencode/plugins/jev-guard/` |
+| Merges Claude Code settings | `config/claude/settings.json` | `~/.claude/settings.json` (JSON: objects merge by key, arrays are unioned without duplicates) |
+| Merges opencode settings | `config/opencode/opencode.jsonc` | `~/.config/opencode/opencode.jsonc` (edits via `jsonc-parser`: comments and formatting are kept) |
+| Rules for agents | `global/AGENTS.md` | a block between `<!-- ai-stack:begin -->` and `<!-- ai-stack:end -->` in `~/.claude/CLAUDE.md`. Text outside the block is not touched. There is no copy for opencode (see below). |
+
+Before writing, the script copies every file it changes to `~/backups/ai-stack-install-<time>/` (the copies may contain keys, do not publish them). It removes old entries that referenced the repository by path. To change the rules or the hook: edit the files in the repository and run the installer again.
+
+The installer honors `CLAUDE_CONFIG_DIR` (Claude Code) and `XDG_CONFIG_HOME` (opencode).
+
+No instructions are installed for opencode: there is neither an `instructions` entry nor `~/.config/opencode/AGENTS.md`. When there is no global `AGENTS.md`, opencode reads `~/.claude/CLAUDE.md` itself (the rule lookup order in the opencode docs: local files, then `~/.config/opencode/AGENTS.md`, then `~/.claude/CLAUDE.md`). This keeps one global source of rules. If you create your own `~/.config/opencode/AGENTS.md`, it overrides `CLAUDE.md` and opencode will not get the `ai-stack` rules.
+
+The configuration is **global only**: the project has no `.claude/settings.json` or `opencode.json` of its own, so the hook runs once, both in `ai-stack` and in other projects.
 
 ---
 
-## Для чего нужен supermemory и как им пользоваться
+## What supermemory is for and how to use it
 
-### Что это
+### What it is
 
-`supermemory` это долговременная память агента. Обычный агент забывает всё при закрытии сессии, а `supermemory` сохраняет важное между сессиями и подмешивает в начало следующих. Работает локально: сервер, база (шифрованная), эмбеддинги (`bge-base-en-v1.5`) и извлечение фактов (`gemma4:e4b-it-qat`) на твоей машине. Ничего не уходит в облако.
+`supermemory` is the agent's long-term memory. An ordinary agent forgets everything when the session closes; `supermemory` keeps the important things between sessions and injects them at the start of the next ones. It runs locally: the server, the (encrypted) database, the embeddings (`bge-base-en-v1.5`) and the fact extraction (`gemma4:e4b-it-qat`) are all on your machine. Nothing goes to the cloud.
 
-### Как память появляется и используется
+### How memory appears and is used
 
 ```
-сессия ──захват──> документ ──модель извлекает факты──> воспоминания
-                                                              │
-новая сессия <──recall (поиск по смыслу + профиль)────────────┘
+session ──capture──> document ──model extracts facts──> memories
+                                                           │
+new session <──recall (semantic search + profile)──────────┘
 ```
 
-1. **Захват.** Плагин отправляет серверу кусок разговора (`/v3/documents`). В opencode это происходит каждые N ходов (`captureEveryNTurns`) и при завершении сессии, в Claude Code через hooks.
-2. **Извлечение.** Сервер режет текст на фрагменты, считает эмбеддинги и просит модель выписать устойчивые факты: предпочтения, решения с причинами, договорённости, ограничения проекта, повторяющиеся ошибки и их исправления. Обработка одного документа занимает около 15 секунд, пока идёт, статус `queued`/`extracting`, затем `done`.
-3. **Recall.** При старте сессии и на каждый запрос плагин ищет релевантные воспоминания (`/v4/search`, `/v4/profile`) и добавляет их в контекст. В Claude Code это видно по блоку `◪ Recalled from supermemory` в ответах.
+1. **Capture.** The plugin sends the server a piece of the conversation (`/v3/documents`). In opencode this happens every N turns (`captureEveryNTurns`) and when the session ends; in Claude Code it happens through hooks.
+2. **Extraction.** The server splits the text into chunks, computes embeddings and asks the model to write out durable facts: preferences, decisions with reasons, agreements, project constraints, recurring errors and their fixes. Processing one document takes about 15 seconds; meanwhile the status is `queued`/`extracting`, then `done`.
+3. **Recall.** At session start and on every request the plugin looks for relevant memories (`/v4/search`, `/v4/profile`) and adds them to the context. In Claude Code you see this as a `◪ Recalled from supermemory` block in the answers.
 
-Память разделена по **контейнерам** (тегам). Для проекта тег строится из имени папки (например, `repo_ai_stack__115c2bf9b35daaef`), поэтому воспоминания одного репозитория не смешиваются с другими. opencode и Claude Code пишут в одну базу и видят воспоминания друг друга, если тег совпадает.
+Memory is separated by **containers** (tags). For a project the tag is built from the folder name (for example, `repo_ai_stack__115c2bf9b35daaef`), so memories of one repository are not mixed with others. opencode and Claude Code write to the same database and see each other's memories when the tag matches.
 
-### Что стоит запоминать
+### What is worth remembering
 
-Хорошо: «используем PowerShell, не bash», «в `mt-pumping` ветка `main` защищена, коммитим через PR», «Proto `uint64` ложится в `DECIMAL(38,0)`», причина, по которой выбрано то или иное решение.
+Good: "we use PowerShell, not bash", "the `main` branch is protected, we commit through PRs", "Proto `uint64` maps to `DECIMAL(38,0)`", the reason a particular decision was made.
 
-Плохо: логи, содержимое файлов, временные пути, секреты. Это хранить не нужно, и плагин opencode настроен так, чтобы такое не сохранять (`filterPrompt`).
+Bad: logs, file contents, temporary paths, secrets. There is no need to store them, and the opencode plugin is configured not to (`filterPrompt`).
 
-### Как пользоваться на проекте
+### How to use it in a project
 
-1. **Просто работай.** Захват и recall автоматические. После нескольких сессий у проекта накопится профиль.
-2. **Запоминай явно.** Скажи агенту: «запомни: в этом проекте миграции делаем только через Flyway». Агент вызовет инструмент памяти (opencode) или факт сохранится при захвате (Claude Code). Явная фраза «запомни / remember» работает надёжнее, чем надежда на автоматическое извлечение.
-3. **Вспоминай явно.** Спроси: «что мы решали про схему БД?». Если автоматический recall промахнулся, агент в opencode может искать сам. В Claude Code инструмент `search_memory` недоступен (MCP плагина смотрит в облако, см. раздел 5.3), поэтому там работает только авто-recall.
-4. **Индексируй кодовую базу** (Claude Code): `/supermemory:index` разберёт репозиторий и сохранит структуру. Полезно в начале работы над большим проектом.
-5. **Проверяй, что сохранилось:**
+1. **Just work.** Capture and recall are automatic. After a few sessions the project accumulates a profile.
+2. **Remember explicitly.** Tell the agent: "remember: in this project migrations are done only through Flyway". The agent calls the memory tool (opencode) or the fact is saved at capture (Claude Code). An explicit "remember" works more reliably than hoping for automatic extraction.
+3. **Recall explicitly.** Ask: "what did we decide about the DB schema?". If automatic recall missed, the agent in opencode can search by itself. In Claude Code the `search_memory` tool is unavailable (the plugin's MCP points to the cloud, see section 5.3), so only automatic recall works there.
+4. **Index the codebase** (Claude Code): `/supermemory:index` analyzes the repository and saves its structure. Useful at the start of work on a large project.
+5. **Check what was saved:**
    ```powershell
    $k = $env:SUPERMEMORY_CC_API_KEY
-   # документы и их статусы (должны быть done, не failed)
+   # documents and their statuses (should be done, not failed)
    curl -s -X POST http://localhost:6767/v3/documents/list -H "Authorization: Bearer $k" -H "Content-Type: application/json" -d '{"limit":20}'
-   # извлечённые воспоминания проекта
+   # extracted memories of the project
    curl -s -X POST http://localhost:6767/v4/memories/list -H "Authorization: Bearer $k" -H "Content-Type: application/json" -d '{"containerTags":["repo_ai_stack__115c2bf9b35daaef"],"limit":25}'
-   # поиск по смыслу
-   curl -s -X POST http://localhost:6767/v4/search -H "Authorization: Bearer $k" -H "Content-Type: application/json" -d '{"q":"как подключен opencode","containerTags":["repo_ai_stack__115c2bf9b35daaef"],"limit":5}'
+   # semantic search
+   curl -s -X POST http://localhost:6767/v4/search -H "Authorization: Bearer $k" -H "Content-Type: application/json" -d '{"q":"how is opencode connected","containerTags":["repo_ai_stack__115c2bf9b35daaef"],"limit":5}'
    ```
-   Веб-интерфейс сервера доступен на `http://localhost:6767`.
-6. **Чисти ошибочную память.** Неверное воспоминание удаляется через удаление документа: `DELETE /v3/documents/{id}`. Документ в статусе `failed` повторно не обработается, пока его не удалить и не добавить заново (подробности в разделе «Диагностика»).
+   The server's web interface is at `http://localhost:6767`.
+6. **Clean up wrong memories.** A wrong memory is removed by deleting its document: `DELETE /v3/documents/{id}`. A document in the `failed` status is not reprocessed until you delete it and add it again (details in the "Troubleshooting" section).
 
-### Что полезно знать
+### Good to know
 
-- Качество воспоминаний зависит от модели извлечения. `gemma4:e4b-it-qat` справляется, но иногда сохраняет мелочи («приложение использует Viper»). Если мусора много, доработай `filterPrompt` в `supermemory.json` (opencode) или смени `SM_MODEL`.
-- Лимит lite-версии сервера: **10 000 документов**.
-- Один и тот же текст в одном контейнере не дублируется: сервер вернёт уже существующий документ.
-- Воспоминания не заменяют документацию. Всё, что нужно знать любому участнику проекта, пиши в `README.md` и `AGENTS.md`/`CLAUDE.md`. Память нужна для того, что накапливается в работе и иначе теряется.
+- The quality of memories depends on the extraction model. `gemma4:e4b-it-qat` copes, but sometimes stores trivia ("the application uses Viper"). If there is a lot of noise, refine `filterPrompt` in `supermemory.json` (opencode) or change `SM_MODEL`.
+- The lite server version is limited to **10,000 documents**.
+- The same text in the same container is not duplicated: the server returns the existing document.
+- Memories do not replace documentation. Put everything any project participant needs to know in `README.md` and `AGENTS.md`/`CLAUDE.md`. Memory is for what accumulates during work and would otherwise be lost.
 
 ---
 
-## 1. Требования
+## 1. Requirements
 
-- Windows 11, Docker Desktop (WSL2-бэкенд, **Linux-контейнеры**).
-- NVIDIA GPU с актуальным драйвером. Проверено на RTX 4070 Ti (12 GB).
-- Ollama 0.35+ внутри контейнера (образ `ollama/ollama:latest` подходит, Tev1 требует `/v1/systemone`).
-- Свободное место: около 12 GB под модели (volume `ollama`).
+- Docker with Compose 2.24+ and **Linux containers** (Windows: Docker Desktop with WSL2; Linux: Docker Engine; macOS: Docker Desktop, OrbStack or Colima).
+- Node.js 18+ (hooks and installer).
+- GPU: NVIDIA inside the container (Windows, Linux) or native Ollama with Metal (macOS). Details: `docs/platforms.md`. Tested on Windows 11 with an RTX 4070 Ti (12 GB).
+- Ollama 0.35+ inside the container (the `ollama/ollama:latest` image is fine; Tev1 needs `/v1/systemone`).
+- Free disk space: about 12 GB for the models (volume `ollama`).
 
-## 2. Файлы
+## 2. Files
 
 ```
 ai-stack/
-  docker-compose.yml
-  .env                      модели и версия supermemory (в .gitignore)
-  supermemory/Dockerfile    официальный Linux-бинарь supermemory-server + проверка sha256
+  docker-compose.yml        base file (Ollama on the CPU)
+  docker-compose.nvidia.yml        NVIDIA GPU for the containerized Ollama (Windows, Linux)
+  docker-compose.host-ollama.yml   Ollama on the host (macOS Metal, any OS)
+  .env, .env.example        models, supermemory version, compose file selection (.env is in .gitignore)
+  docs/platforms.md, docs/platforms.ru.md   instructions for Windows, Linux and macOS (English, Russian)
+  supermemory/Dockerfile    official Linux supermemory-server binary + sha256 check
   jev/Dockerfile            Python 3.12 + FastMCP
-  jev/app.py                MCP-инструменты и REST поверх Ollama /v1/systemone
-  hooks/                    защита коммитов (jev-guard): общий модуль, hook Claude Code, плагин opencode
-  .claude/settings.json     подключение hook для Claude Code
-  opencode.json             подключение плагина для opencode
-  AGENTS.md, CLAUDE.md      правила для агентов
+  jev/app.py                MCP tools and REST on top of Ollama /v1/systemone
+  hooks/                    commit protection (jev-guard): shared module, Claude Code hook, opencode plugin
+  config/                   settings fragments for Claude Code and opencode (merged by the installer)
+  global/AGENTS.md          global rules for agents (copied by the installer)
+  scripts/install-configs.js  installer of the global configs
+  AGENTS.md, CLAUDE.md      rules only for working on ai-stack
 ```
 
 `.env`:
 
 ```
-SM_MODEL=gemma4:e4b-it-qat      # модель извлечения фактов для supermemory
-JEV_MODEL=tev1:4b               # модель решений для jev
-SUPERMEMORY_VERSION=0.0.8       # релиз server-vX.Y.Z на GitHub supermemoryai/supermemory
+SM_MODEL=gemma4:e4b-it-qat      # fact extraction model for supermemory
+JEV_MODEL=tev1:4b               # decision model for jev
+SUPERMEMORY_VERSION=0.0.8       # release server-vX.Y.Z on GitHub supermemoryai/supermemory
 ```
 
-## 3. Запуск
+For an NVIDIA GPU on Windows add the line `COMPOSE_FILE=docker-compose.yml;docker-compose.nvidia.yml` to `.env` (the `;` separator is only for Windows; on Linux and macOS use `:`). Without it the containerized Ollama runs on the CPU. A template is in `.env.example`.
+
+## 3. Start
 
 ```powershell
-cd C:\Users\r00t\Work\ai-stack
+cd ai-stack
 docker compose up -d --build
 docker compose ps
 ```
 
-Первый запуск скачивает модели (около 8 GB), `supermemory` и `jev` стартуют после `ollama-pull`.
+The first start downloads the models (about 8 GB); `supermemory` and `jev` start after `ollama-pull`.
 
-Ключ API для supermemory печатается при первом старте в логах и хранится в volume `sm-data`:
+The supermemory API key is printed in the logs on the first start and stored in the `sm-data` volume:
 
 ```powershell
 docker compose logs supermemory | Select-String "api key"
 ```
 
-Остановка: `docker compose down` (данные остаются в volumes `ollama` и `sm-data`).
-`docker compose down -v` удалит и данные, включая базу воспоминаний.
+Stop: `docker compose down` (data stays in the `ollama` and `sm-data` volumes).
+`docker compose down -v` deletes the data too, including the memory database.
 
-### Проверка
+### Checks
 
 ```powershell
 curl http://localhost:6767/v3/health                       # supermemory
 curl http://localhost:8765/health                          # jev: {"ok":true,"model":"tev1:4b",...}
-docker compose exec ollama ollama ps                       # обе модели должны быть 100% GPU
+docker compose exec ollama ollama ps                       # both models should be 100% GPU
 ```
 
-Тест `jev`:
+A `jev` test:
 
 ```powershell
 curl http://localhost:8765/v1/decide -H "Content-Type: application/json" -d '{
@@ -270,17 +303,17 @@ curl http://localhost:8765/v1/decide -H "Content-Type: application/json" -d '{
     "criteria": {"bug": "reports broken behavior", "feature": "asks for new behavior", "question": "asks how something works"}}}}'
 ```
 
-Ответ содержит `choice`, `probabilities` и `confidence`.
+The answer contains `choice`, `probabilities` and `confidence`.
 
 ---
 
-## 4. Подключение opencode
+## 4. Connect opencode
 
-Конфиг: `C:\Users\r00t\.config\opencode\`.
+Config: `%USERPROFILE%\.config\opencode\` (Linux and macOS: `~/.config/opencode/`).
 
 ### 4.1 jev (MCP)
 
-В `opencode.jsonc` добавь:
+Add to `opencode.jsonc`:
 
 ```jsonc
 {
@@ -294,13 +327,13 @@ curl http://localhost:8765/v1/decide -H "Content-Type: application/json" -d '{
 }
 ```
 
-Проверка: `opencode mcp list` показывает `jev connected`. Инструменты: `classify`, `check`, `score`, `decide`.
+Check: `opencode mcp list` shows `jev connected`. Tools: `classify`, `check`, `score`, `decide`.
 
-### 4.2 supermemory (плагин)
+### 4.2 supermemory (plugin)
 
-Плагин `opencode-supermemory` 2.x написан под API OpenCode 2. OpenCode 1.x требует, чтобы плагин экспортировал по умолчанию объект с `server()` или `tui()`, поэтому имя пакета не работает. Нужен shim.
+The `opencode-supermemory` 2.x plugin is written for the OpenCode 2 API. OpenCode 1.x requires a plugin to default-export an object with `server()` or `tui()`, so the package name does not work. A shim is needed.
 
-1. Пакет установлен в папке конфига (`package.json`: `opencode-supermemory ^2.0.15`):
+1. The package is installed in the config folder (`package.json`: `opencode-supermemory ^2.0.15`):
    ```powershell
    cd $HOME\.config\opencode
    npm install opencode-supermemory
@@ -310,18 +343,18 @@ curl http://localhost:8765/v1/decide -H "Content-Type: application/json" -d '{
    import { SupermemoryPlugin } from "opencode-supermemory";
    export default SupermemoryPlugin;
    ```
-3. В `opencode.jsonc` зарегистрируй **shim**, а не имя пакета:
+3. In `opencode.jsonc` register the **shim**, not the package name:
    ```jsonc
    "plugin": [
      "./plugins/supermemory/shim.js"
    ]
    ```
-4. `supermemory.json` рядом с `opencode.jsonc`:
+4. `supermemory.json` next to `opencode.jsonc`:
    ```json
    {
      "recallMode": "direct",
      "captureEveryNTurns": 3,
-     "apiKey": "<ключ из логов контейнера>",
+     "apiKey": "<key from the container logs>",
      "baseUrl": "http://localhost:6767",
      "similarityThreshold": 0.62,
      "maxMemories": 5,
@@ -329,125 +362,127 @@ curl http://localhost:8765/v1/decide -H "Content-Type: application/json" -d '{
      "injectProfile": true
    }
    ```
-   Значения `similarityThreshold`, `maxMemories`, `filterPrompt` подбирай под себя.
-5. Перезапусти opencode: конфиг читается только при старте.
+   Tune `similarityThreshold`, `maxMemories` and `filterPrompt` to your needs.
+5. Restart opencode: the config is read only at startup.
 
-Нюансы:
+Notes:
 
-- `captureEveryNTurns: 0` **не отключает** захват. Он означает «захват только в конце сессии». Для регулярного захвата поставь 3-5.
-- Ключ привязан к базе. Если volume `sm-data` пересоздан, ключ новый, а старый даёт `401`. Скопируй новый в `apiKey`.
-- Ключ хранится в `supermemory.json` открытым текстом. Не коммить папку конфига.
+- `captureEveryNTurns: 0` **does not turn capture off**. It means "capture only at the end of the session". For regular capture set 3-5.
+- The key is bound to the database. If the `sm-data` volume is recreated, the key is new and the old one gives `401`. Copy the new one into `apiKey`.
+- The key is stored in `supermemory.json` in plain text. Do not commit the config folder.
 
 ---
 
-## 5. Подключение Claude Code
+## 5. Connect Claude Code
 
 ### 5.1 jev (MCP)
 
-В обычном терминале:
+In a regular terminal:
 
 ```powershell
 claude mcp add --transport http --scope user jev http://localhost:8765/mcp
 claude mcp list        # jev ... Connected
 ```
 
-`--scope user` делает сервер доступным во всех проектах. Инструменты в сессии называются `mcp__jev__classify`, `mcp__jev__check`, `mcp__jev__score`, `mcp__jev__decide`.
+`--scope user` makes the server available in all projects. In a session the tools are named `mcp__jev__classify`, `mcp__jev__check`, `mcp__jev__score`, `mcp__jev__decide`.
 
-### 5.2 supermemory (плагин, только hooks)
+### 5.2 supermemory (plugin, hooks only)
 
-1. В сессии Claude Code:
+1. In a Claude Code session:
    ```
    /plugin marketplace add supermemoryai/claude-supermemory
    /plugin install supermemory@supermemory-plugins
    ```
-2. Две переменные окружения **пользователя** (без них плагин откроет браузерный логин в облако и пойдёт на `api.supermemory.ai`):
+2. Two **user** environment variables (without them the plugin opens a browser login to the cloud and goes to `api.supermemory.ai`):
    ```powershell
    [Environment]::SetEnvironmentVariable("SUPERMEMORY_API_URL", "http://localhost:6767", "User")
-   [Environment]::SetEnvironmentVariable("SUPERMEMORY_CC_API_KEY", "<тот же ключ, что в opencode>", "User")
+   [Environment]::SetEnvironmentVariable("SUPERMEMORY_CC_API_KEY", "<the same key as in opencode>", "User")
    ```
-   Адрес берётся из `SUPERMEMORY_API_URL` в первую очередь, затем из `baseUrl` в `.claude/.supermemory-claude/config.json` проекта, иначе облако.
-3. **Полностью закрой терминал и Claude Code и запусти заново.** Переменные подхватывает только новый процесс. `/clear` и `/reload-plugins` не помогают.
-4. Проверка: `/supermemory:status`. Ожидаемо: источник ключа `env`, проба `/v4/profile` возвращает `200`.
+   The address comes from `SUPERMEMORY_API_URL` first, then from `baseUrl` in the project's `.claude/.supermemory-claude/config.json`, otherwise the cloud. For Linux and macOS shells see `docs/platforms.md`.
+3. **Fully close the terminal and Claude Code and start again.** Only a new process picks up the variables. `/clear` and `/reload-plugins` do not help.
+4. Check: `/supermemory:status`. Expected: key source `env`, the `/v4/profile` probe returns `200`.
 
-Параметры плагина (`~/.supermemory-claude/settings.json`): `maxProfileItems` (по умолчанию 5), `signalExtraction`, `includeTools`.
+Plugin settings (`~/.supermemory-claude/settings.json`): `maxProfileItems` (default 5), `signalExtraction`, `includeTools`.
 
-### 5.3 Ограничение: MCP плагина ходит в облако
+### 5.3 Limitation: the plugin's MCP goes to the cloud
 
-MCP-прокси плагина (`hooks/mcp-proxy.js`) по умолчанию использует `https://mcp.supermemory.ai/mcp`. У локального сервера эндпоинта `/mcp` нет (404). Поэтому:
+The plugin's MCP proxy (`hooks/mcp-proxy.js`) uses `https://mcp.supermemory.ai/mcp` by default. The local server has no `/mcp` endpoint (404). Therefore:
 
-- **hooks** (авто-recall в начале сессии, захват, `/supermemory:status`) работают с локальным сервером;
-- **MCP-инструменты** `search_memory`, `add_memory`, `whoAmI` и агент `supermemory:context-gatherer` не работают (ошибка `-32001 not authenticated`). Ключ локального сервера в облаке недействителен, и отправлять туда данные не нужно.
+- **hooks** (automatic recall at session start, capture, `/supermemory:status`) work with the local server;
+- the **MCP tools** `search_memory`, `add_memory`, `whoAmI` and the `supermemory:context-gatherer` agent do not work (error `-32001 not authenticated`). The local server's key is invalid in the cloud, and no data should be sent there.
 
-Если ошибка в `/mcp` мешает, отключи сервер `plugin:supermemory:supermemory` через `/mcp`. Hooks от этого не зависят.
+If the error in `/mcp` is a nuisance, disable the `plugin:supermemory:supermemory` server through `/mcp`. The hooks do not depend on it.
 
 ---
 
-## 6. Модели и видеопамять
+## 6. Models and video memory
 
-Для 12 GB VRAM подобрано так, чтобы **обе модели были целиком на GPU без offload**:
+Chosen for 12 GB of VRAM so that **both models sit entirely on the GPU without offload**:
 
-| Модель | Назначение | VRAM | Контекст |
+| Model | Purpose | VRAM | Context |
 |---|---|---|---|
-| `tev1:4b` | решения (`jev`) | около 4.7 GB | 2050 |
-| `gemma4:e4b-it-qat` | извлечение фактов | около 3.1 GB | 4096 |
+| `tev1:4b` | decisions (`jev`) | about 4.7 GB | 2050 |
+| `gemma4:e4b-it-qat` | fact extraction | about 3.1 GB | 4096 |
 
-Суммарно занято около 10.9 из 12.3 GB, свободно около 1.1 GB. Обе модели держатся в памяти 24 часа (`OLLAMA_KEEP_ALIVE`, `JEV_KEEP_ALIVE`), `OLLAMA_MAX_LOADED_MODELS=2`.
+In total about 10.9 of 12.3 GB are used, about 1.1 GB is free. Both models stay in memory for 24 hours (`OLLAMA_KEEP_ALIVE`, `JEV_KEEP_ALIVE`), `OLLAMA_MAX_LOADED_MODELS=2`.
 
-Следствия:
+Consequences:
 
-- Большая модель в LM Studio (например, Qwen3-14B Q4, около 9 GB) рядом не поместится. Либо выгружай её на время, либо используй модель поменьше.
-- Если VRAM не хватает, `tev1:4b-q4_K_M` занимает около 2.7 GB вместо 4.5 GB.
-- Проверка: `docker compose exec ollama ollama ps` должен показывать `100% GPU`. Любой процент CPU означает offload.
+- A big model in LM Studio (for example Qwen3-14B Q4, about 9 GB) will not fit next to them. Either unload it for the time being or use a smaller model.
+- If VRAM is short, `tev1:4b-q4_K_M` takes about 2.7 GB instead of 4.5 GB.
+- Check: `docker compose exec ollama ollama ps` must show `100% GPU`. Any CPU percentage means offload.
 
-Смена модели: поправь `.env`, затем `docker compose up -d`. `ollama-pull` скачает недостающее.
+Changing a model: edit `.env`, then `docker compose up -d`. `ollama-pull` downloads what is missing.
 
-`gemma4` перед ответом «думает»: рассуждения идут отдельным полем, поэтому извлечение одного документа занимает 14-17 секунд. Для фонового захвата это терпимо.
-
----
-
-## 7. Безопасность
-
-- Все порты опубликованы только на `127.0.0.1`. Сервер supermemory внутри контейнера слушает `0.0.0.0` и не имеет флага смены адреса, но наружу порт не публикуется.
-- Не публикуй порты на `0.0.0.0` и не открывай их в фаерволе.
-- Ключ API лежит в `supermemory.json` и в переменных окружения пользователя открытым текстом.
-- `jev` и Tev1 это небольшая модель (точность на бенчмарке около 73% для 4B). Нельзя полагаться на неё как на единственную защиту для решений с последствиями (удаление, деплой, коммит).
+`gemma4` "thinks" before answering: the reasoning goes into a separate field, so extracting one document takes 14-17 seconds. That is tolerable for background capture.
 
 ---
 
-## 8. Обслуживание
+## 7. Security
 
-Обновить supermemory: смени `SUPERMEMORY_VERSION` в `.env` (релизы `server-vX.Y.Z` на GitHub) и пересобери:
+- All ports are published only on `127.0.0.1`. The supermemory server inside the container listens on `0.0.0.0` and has no flag to change that, but the port is not published outward.
+- Do not publish the ports on `0.0.0.0` and do not open them in the firewall.
+- The API key is stored in `supermemory.json` and in the user's environment variables in plain text.
+- `jev` and Tev1 are a small model (about 73% benchmark accuracy for 4B). Do not rely on it as the only safeguard for decisions with consequences (delete, deploy, commit).
+
+---
+
+## 8. Maintenance
+
+Update supermemory: change `SUPERMEMORY_VERSION` in `.env` (releases `server-vX.Y.Z` on GitHub) and rebuild:
 
 ```powershell
 docker compose build supermemory ; docker compose up -d
 ```
 
-Бэкап памяти (volume `sm-data`):
+Back up the memory (volume `sm-data`):
 
 ```powershell
 docker run --rm -v ai-stack_sm-data:/data -v ${PWD}:/backup alpine tar czf /backup/sm-data.tgz -C /data .
 ```
 
-Логи: `docker compose logs -f supermemory` (там же диагностика `docker compose exec supermemory supermemory-server doctor`).
+Logs: `docker compose logs -f supermemory` (diagnostics are there too: `docker compose exec supermemory supermemory-server doctor`).
 
 ---
 
-## 9. Диагностика
+## 9. Troubleshooting
 
-| Симптом | Причина и решение |
+| Symptom | Cause and fix |
 |---|---|
-| В UI supermemory 0 воспоминаний, документы `failed` | Документы создались, когда LLM была недоступна или стек перезапускался. Повторная отправка того же текста возвращает старый `failed`-документ без обработки. Нужно удалить документ (`DELETE /v3/documents/{id}`) и добавить заново. |
-| `401` от supermemory в opencode | Ключ из старой базы. Возьми новый из логов и впиши в `apiKey`. |
-| `llama-server process has terminated: signal: killed` при загрузке модели | OOM в WSL2: лимит памяти WSL слишком мал (проверь `memory=` в `~/.wslconfig`, по умолчанию 50% RAM). После правки `wsl --shutdown` остановит все контейнеры Docker, включая чужие проекты. |
-| `redirect target not allowed ... resolves to non-public 198.18.x.x` при `ollama pull` | VPN/прокси с fake-IP DNS. Добавь `registry.ollama.ai` и `*.r2.cloudflarestorage.com` в исключения или отключи VPN на время загрузки. |
-| `Authentication timed out` / открылся `console.supermemory.ai` в Claude Code | Переменные окружения не видны процессу. Перезапусти терминал и Claude Code целиком. |
-| `-32001 Supermemory is not authenticated` в `/mcp` | MCP плагина смотрит в облако, см. раздел 5.3. |
-| Модель в `ollama ps` не `100% GPU` | Не хватает VRAM. Закрой лишнее (LM Studio) или возьми квантизацию поменьше. |
-| Порт 6767 занят | Запущен локальный `supermemory-server.exe` на Windows (`supermemory-start`). Останови его (`supermemory-stop`). |
-| Контейнеры остановились сами | Проверь `docker events --since 10m` и не перезапускалась ли Docker Desktop. Все сервисы имеют `restart: unless-stopped`. |
+| supermemory UI shows 0 memories, documents are `failed` | The documents were created while the LLM was unavailable or the stack was restarting. Re-sending the same text returns the old `failed` document without processing. Delete the document (`DELETE /v3/documents/{id}`) and add it again. |
+| `401` from supermemory in opencode | The key is from an old database. Take the new one from the logs and put it in `apiKey`. |
+| `llama-server process has terminated: signal: killed` while loading a model | Out of memory in WSL2: the WSL memory limit is too small (check `memory=` in `~/.wslconfig`; the default is 50% of RAM). After editing it, `wsl --shutdown` stops all Docker containers, including other projects'. |
+| `redirect target not allowed ... resolves to non-public 198.18.x.x` on `ollama pull` | A VPN/proxy with fake-IP DNS. Add `registry.ollama.ai` and `*.r2.cloudflarestorage.com` to the exclusions or turn the VPN off while downloading. |
+| `Authentication timed out` / `console.supermemory.ai` opened in Claude Code | The environment variables are not visible to the process. Restart the terminal and Claude Code completely. |
+| `-32001 Supermemory is not authenticated` in `/mcp` | The plugin's MCP points to the cloud, see section 5.3. |
+| A model in `ollama ps` is not `100% GPU` | Not enough VRAM. Close other GPU users (LM Studio) or take a smaller quantization. |
+| Port 6767 is in use | The local `supermemory-server.exe` is running on Windows (`supermemory-start`). Stop it (`supermemory-stop`). |
+| The containers stopped by themselves | Check `docker events --since 10m` and whether Docker Desktop restarted. All services have `restart: unless-stopped`. |
 
-## 10. Откуда что взято
+More platform-specific problems (Linux, macOS): `docs/platforms.md`.
 
-- Супермемори: официальные релизы [supermemoryai/supermemory](https://github.com/supermemoryai/supermemory/releases) (`supermemory-server-linux-x64`), документация <https://supermemory.ai/docs/self-hosting/overview>.
-- Плагин Claude Code: [supermemoryai/claude-supermemory](https://github.com/supermemoryai/claude-supermemory), документация <https://supermemory.ai/docs/integrations/claude-code>.
-- Tev1: <https://ollama.com/library/tev1> (Together AI, модель принимает вопросы типов `choice`, `noul`, `score` через `/v1/systemone`).
+## 10. Sources
+
+- supermemory: official releases of [supermemoryai/supermemory](https://github.com/supermemoryai/supermemory/releases) (`supermemory-server-linux-x64`), documentation <https://supermemory.ai/docs/self-hosting/overview>.
+- Claude Code plugin: [supermemoryai/claude-supermemory](https://github.com/supermemoryai/claude-supermemory), documentation <https://supermemory.ai/docs/integrations/claude-code>.
+- Tev1: <https://ollama.com/library/tev1> (Together AI; the model takes questions of the types `choice`, `noul`, `score` through `/v1/systemone`).

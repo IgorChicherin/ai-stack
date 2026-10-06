@@ -1,0 +1,13 @@
+{
+  // Fragment merged into ~/.config/opencode/opencode.jsonc by scripts/install-configs.js.
+  // Arrays are unioned, objects are merged key by key. Existing settings are kept.
+  // Global rules need no entry here: opencode loads ~/.config/opencode/AGENTS.md by itself.
+  "mcp": {
+    "jev": {
+      "type": "remote",
+      "url": "http://localhost:8765/mcp",
+      "enabled": true
+    }
+  },
+  "plugin": ["./plugins/jev-guard/opencode-jev-guard.js"]
+}
