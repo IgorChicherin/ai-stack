@@ -165,6 +165,7 @@ node scripts/install-configs.js              # установить
 | Сливает настройки Claude Code | `config/claude/settings.json` | `~/.claude/settings.json` (JSON: объекты сливаются по ключам, массивы объединяются без дублей) |
 | Сливает настройки opencode | `config/opencode/opencode.jsonc` | `~/.config/opencode/opencode.jsonc` (правки через `jsonc-parser`: комментарии и форматирование сохраняются) |
 | Правила для агентов | `global/AGENTS.md` | блок между `<!-- ai-stack:begin -->` и `<!-- ai-stack:end -->` в `~/.claude/CLAUDE.md`. Текст вне блока не трогается. Для opencode копии нет (см. ниже). |
+| Регистрирует MCP-шим supermemory | `supermemory/mcp-shim.js` | `~/.claude/mcp/supermemory/` и MCP-сервер `supermemory` уровня user (через `claude mcp add`; если `claude` нет в PATH, шаг пропускается с подсказкой) |
 
 Перед записью скрипт копирует каждый изменяемый файл в `~/backups/ai-stack-install-<время>/` (в копиях могут быть ключи, не публикуй). Старые записи, которые ссылались на репозиторий по пути, он удаляет. Чтобы поменять правила или хук: правь файлы в репозитории и запусти установщик ещё раз.
 
@@ -204,7 +205,7 @@ node scripts/install-configs.js              # установить
 
 1. **Просто работай.** Захват и recall автоматические. После нескольких сессий у проекта накопится профиль.
 2. **Запоминай явно.** Скажи агенту: «запомни: в этом проекте миграции делаем только через Flyway». Агент вызовет инструмент памяти (opencode) или факт сохранится при захвате (Claude Code). Явная фраза «запомни / remember» работает надёжнее, чем надежда на автоматическое извлечение.
-3. **Вспоминай явно.** Спроси: «что мы решали про схему БД?». Если автоматический recall промахнулся, агент в opencode может искать сам. В Claude Code инструмент `search_memory` недоступен (MCP плагина смотрит в облако, см. раздел 5.3), поэтому там работает только авто-recall.
+3. **Вспоминай явно.** Спроси: «что мы решали про схему БД?». Если автоматический recall промахнулся, агент может искать сам: в opencode через инструмент памяти плагина, в Claude Code через `search_memory` локального MCP-shim (раздел 5.3).
 4. **Индексируй кодовую базу** (Claude Code): `/supermemory:index` разберёт репозиторий и сохранит структуру. Полезно в начале работы над большим проектом.
 5. **Проверяй, что сохранилось:**
    ```powershell
@@ -246,6 +247,7 @@ ai-stack/
   .env, .env.example        модели, версия supermemory, выбор compose-файлов (.env в .gitignore)
   docs/platforms.md, docs/platforms.ru.md   инструкции для Windows, Linux и macOS (English, Русский)
   supermemory/Dockerfile    официальный Linux-бинарь supermemory-server + проверка sha256
+  supermemory/mcp-shim.js   stdio MCP-сервер для Claude Code поверх локального API supermemory
   jev/Dockerfile            Python 3.12 + FastMCP
   jev/app.py                MCP-инструменты и REST поверх Ollama /v1/systemone
   hooks/                    защита коммитов (jev-guard): общий модуль, hook Claude Code, плагин opencode
@@ -402,14 +404,39 @@ claude mcp list        # jev ... Connected
 
 Параметры плагина (`~/.supermemory-claude/settings.json`): `maxProfileItems` (по умолчанию 5), `signalExtraction`, `includeTools`.
 
-### 5.3 Ограничение: MCP плагина ходит в облако
+### 5.3 MCP-инструменты supermemory (локальный shim)
 
-MCP-прокси плагина (`hooks/mcp-proxy.js`) по умолчанию использует `https://mcp.supermemory.ai/mcp`. У локального сервера эндпоинта `/mcp` нет (404). Поэтому:
+MCP-прокси плагина (`hooks/mcp-proxy.js`) всегда ходит на `https://mcp.supermemory.ai/mcp`. У локального сервера эндпоинта `/mcp` нет (404), а его ключ в облаке недействителен (`401 Invalid or expired token`; в `/mcp` это видно как упавший `plugin:supermemory:supermemory` или `-32001 not authenticated`). Не направляй плагин в облако: память разделится на два хранилища, а данные репозитория уйдут с машины.
 
-- **hooks** (авто-recall в начале сессии, захват, `/supermemory:status`) работают с локальным сервером;
-- **MCP-инструменты** `search_memory`, `add_memory`, `whoAmI` и агент `supermemory:context-gatherer` не работают (ошибка `-32001 not authenticated`). Ключ локального сервера в облаке недействителен, и отправлять туда данные не нужно.
+Hooks (авто-recall, захват, `/supermemory:status`) не используют MCP и работают с локальным сервером как есть. Для MCP-инструментов используй `supermemory/mcp-shim.js`: stdio MCP-сервер без зависимостей (Node 18+), который отображает инструменты на локальный HTTP API.
 
-Если ошибка в `/mcp` мешает, отключи сервер `plugin:supermemory:supermemory` через `/mcp`. Hooks от этого не зависят.
+| Инструмент | Локальный эндпоинт |
+|---|---|
+| `search_memory` | `POST /v4/search` |
+| `add_memory` | `POST /v3/documents` |
+| `listMemories` | `POST /v4/memories/list` |
+| `listSpaces` | собирается из `POST /v3/documents/list` (эндпоинта spaces у сервера нет) |
+| `whoAmI` | `POST /v4/profile` (проверяет ключ) |
+
+По умолчанию каждый инструмент работает с контейнером текущего репозитория. Shim вычисляет тег тем же алгоритмом, что и плагин (хеш git remote `origin`, `SUPERMEMORY_REPO_TAG`, `repoContainerTag` в `.claude/.supermemory-claude/config.json`), поэтому инструменты и hooks пишут в один контейнер.
+
+1. Зарегистрируй shim один раз для всех проектов. Имя сервера должно быть `supermemory`: тогда инструменты называются `mcp__supermemory__*`, и их находят `/supermemory:index` и агент `supermemory:context-gatherer`.
+   Этот шаг делает установщик (раздел 2): копирует шим и регистрирует его. Команда ниже — ручной аналог.
+   ```powershell
+   claude mcp add --scope user supermemory -- node "C:\Users\<you>\Work\ai-stack\supermemory\mcp-shim.js"
+   ```
+   Shim берёт `SUPERMEMORY_API_URL` и `SUPERMEMORY_CC_API_KEY` из окружения (раздел 5.2). Своих настроек у него нет.
+2. Отключи облачный сервер плагина: `/mcp` → `plugin:supermemory:supermemory` → Disable. Hooks от него не зависят.
+3. Перезапусти Claude Code. Проверка: `claude mcp list` показывает `supermemory ... Connected`; в сессии попроси агента вызвать `whoAmI`. Ожидаемо: `Connected to http://localhost:6767 (local supermemory). Key accepted. Container: repo_<name>__<hash>.`
+
+Ручная проверка без Claude Code (запускай из папки репозитория):
+```bash
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"whoAmI","arguments":{}}}' \
+  | node ~/Work/ai-stack/supermemory/mcp-shim.js
+```
+
+Shim повторяет алгоритм тега плагина версии 0.1.8. Если обновление плагина изменит алгоритм, инструменты и hooks будут смотреть в разные контейнеры: сравни контейнер из `whoAmI` с тегом в `/supermemory:status`.
 
 ---
 
@@ -472,7 +499,8 @@ docker run --rm -v ai-stack_sm-data:/data -v ${PWD}:/backup alpine tar czf /back
 | `llama-server process has terminated: signal: killed` при загрузке модели | OOM в WSL2: лимит памяти WSL слишком мал (проверь `memory=` в `~/.wslconfig`, по умолчанию 50% RAM). После правки `wsl --shutdown` остановит все контейнеры Docker, включая чужие проекты. |
 | `redirect target not allowed ... resolves to non-public 198.18.x.x` при `ollama pull` | VPN/прокси с fake-IP DNS. Добавь `registry.ollama.ai` и `*.r2.cloudflarestorage.com` в исключения или отключи VPN на время загрузки. |
 | `Authentication timed out` / открылся `console.supermemory.ai` в Claude Code | Переменные окружения не видны процессу. Перезапусти терминал и Claude Code целиком. |
-| `-32001 Supermemory is not authenticated` в `/mcp` | MCP плагина смотрит в облако, см. раздел 5.3. |
+| Упавший `plugin:supermemory:supermemory` или `-32001 Supermemory is not authenticated` в `/mcp` | MCP плагина смотрит в облако. Отключи его и используй локальный shim, см. раздел 5.3. |
+| Shim `supermemory` подключён, но инструменты возвращают `SUPERMEMORY_CC_API_KEY is not set` или `401` | Claude Code запущен без переменных окружения из раздела 5.2. Перезапусти терминал и Claude Code. |
 | Модель в `ollama ps` не `100% GPU` | Не хватает VRAM. Закрой лишнее (LM Studio) или возьми квантизацию поменьше. |
 | Порт 6767 занят | Запущен локальный `supermemory-server.exe` на Windows (`supermemory-start`). Останови его (`supermemory-stop`). |
 | Контейнеры остановились сами | Проверь `docker events --since 10m` и не перезапускалась ли Docker Desktop. Все сервисы имеют `restart: unless-stopped`. |

@@ -165,6 +165,7 @@ What `scripts/install-configs.js` does (safe to re-run; the second run changes n
 | Merges Claude Code settings | `config/claude/settings.json` | `~/.claude/settings.json` (JSON: objects merge by key, arrays are unioned without duplicates) |
 | Merges opencode settings | `config/opencode/opencode.jsonc` | `~/.config/opencode/opencode.jsonc` (edits via `jsonc-parser`: comments and formatting are kept) |
 | Rules for agents | `global/AGENTS.md` | a block between `<!-- ai-stack:begin -->` and `<!-- ai-stack:end -->` in `~/.claude/CLAUDE.md`. Text outside the block is not touched. There is no copy for opencode (see below). |
+| Registers the supermemory MCP shim | `supermemory/mcp-shim.js` | `~/.claude/mcp/supermemory/` plus the user-scope MCP server `supermemory` (through `claude mcp add`; skipped with a hint when the `claude` CLI is not on PATH) |
 
 Before writing, the script copies every file it changes to `~/backups/ai-stack-install-<time>/` (the copies may contain keys, do not publish them). It removes old entries that referenced the repository by path. To change the rules or the hook: edit the files in the repository and run the installer again.
 
@@ -206,7 +207,7 @@ Bad: logs, file contents, temporary paths, secrets. There is no need to store th
 
 1. **Just work.** Capture and recall are automatic. After a few sessions the project accumulates a profile.
 2. **Remember explicitly.** Tell the agent: "remember: in this project migrations are done only through Flyway". The agent calls the memory tool (opencode) or the fact is saved at capture (Claude Code). An explicit "remember" works more reliably than hoping for automatic extraction.
-3. **Recall explicitly.** Ask: "what did we decide about the DB schema?". If automatic recall missed, the agent in opencode can search by itself. In Claude Code the `search_memory` tool is unavailable (the plugin's MCP points to the cloud, see section 5.3), so only automatic recall works there.
+3. **Recall explicitly.** Ask: "what did we decide about the DB schema?". If automatic recall missed, the agent can search by itself: in opencode through the plugin's memory tool, in Claude Code through `search_memory` of the local MCP shim (section 5.3).
 4. **Index the codebase** (Claude Code): `/supermemory:index` analyzes the repository and saves its structure. Useful at the start of work on a large project.
 5. **Check what was saved:**
    ```powershell
@@ -248,6 +249,7 @@ ai-stack/
   .env, .env.example        models, supermemory version, compose file selection (.env is in .gitignore)
   docs/platforms.md, docs/platforms.ru.md   instructions for Windows, Linux and macOS (English, Russian)
   supermemory/Dockerfile    official Linux supermemory-server binary + sha256 check
+  supermemory/mcp-shim.js   stdio MCP server for Claude Code on top of the local supermemory API
   jev/Dockerfile            Python 3.12 + FastMCP
   jev/app.py                MCP tools and REST on top of Ollama /v1/systemone
   hooks/                    commit protection (jev-guard): shared module, Claude Code hook, opencode plugin
@@ -404,14 +406,39 @@ claude mcp list        # jev ... Connected
 
 Plugin settings (`~/.supermemory-claude/settings.json`): `maxProfileItems` (default 5), `signalExtraction`, `includeTools`.
 
-### 5.3 Limitation: the plugin's MCP goes to the cloud
+### 5.3 supermemory MCP tools (local shim)
 
-The plugin's MCP proxy (`hooks/mcp-proxy.js`) uses `https://mcp.supermemory.ai/mcp` by default. The local server has no `/mcp` endpoint (404). Therefore:
+The plugin's MCP proxy (`hooks/mcp-proxy.js`) always talks to `https://mcp.supermemory.ai/mcp`. The local server has no `/mcp` endpoint (404), and its key is invalid in the cloud (`401 Invalid or expired token`, shown in `/mcp` as `plugin:supermemory:supermemory` failed or `-32001 not authenticated`). Do not point the plugin at the cloud: memories would split between two stores and repository data would leave the machine.
 
-- **hooks** (automatic recall at session start, capture, `/supermemory:status`) work with the local server;
-- the **MCP tools** `search_memory`, `add_memory`, `whoAmI` and the `supermemory:context-gatherer` agent do not work (error `-32001 not authenticated`). The local server's key is invalid in the cloud, and no data should be sent there.
+The hooks (automatic recall, capture, `/supermemory:status`) do not use MCP and work with the local server as is. For the MCP tools, use `supermemory/mcp-shim.js`: a stdio MCP server without dependencies (Node 18+) that maps the tools onto the local HTTP API.
 
-If the error in `/mcp` is a nuisance, disable the `plugin:supermemory:supermemory` server through `/mcp`. The hooks do not depend on it.
+| Tool | Local endpoint |
+|---|---|
+| `search_memory` | `POST /v4/search` |
+| `add_memory` | `POST /v3/documents` |
+| `listMemories` | `POST /v4/memories/list` |
+| `listSpaces` | derived from `POST /v3/documents/list` (the server has no spaces endpoint) |
+| `whoAmI` | `POST /v4/profile` (checks the key) |
+
+Every tool defaults to the current repository's container. The shim computes the tag with the same algorithm as the plugin (git remote `origin` hash, `SUPERMEMORY_REPO_TAG`, `repoContainerTag` in `.claude/.supermemory-claude/config.json`), so the tools and the hooks use the same container.
+
+1. Register the shim once for all projects. The server name must be `supermemory`: the tools then appear as `mcp__supermemory__*`, the names that `/supermemory:index` and the `supermemory:context-gatherer` agent look for.
+   Run the installer (section 2) to do this step: it copies the shim and registers it. The command below is the manual equivalent.
+   ```powershell
+   claude mcp add --scope user supermemory -- node "C:\Users\<you>\Work\ai-stack\supermemory\mcp-shim.js"
+   ```
+   The shim reads `SUPERMEMORY_API_URL` and `SUPERMEMORY_CC_API_KEY` from the environment (section 5.2). It has no settings of its own.
+2. Disable the plugin's cloud server: `/mcp` → `plugin:supermemory:supermemory` → Disable. The hooks do not depend on it.
+3. Restart Claude Code. Check: `claude mcp list` shows `supermemory ... Connected`; in a session, ask the agent to call `whoAmI`. Expected: `Connected to http://localhost:6767 (local supermemory). Key accepted. Container: repo_<name>__<hash>.`
+
+Manual check without Claude Code (run it from a repository folder):
+```bash
+printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"0"}}}' \
+  '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"whoAmI","arguments":{}}}' \
+  | node ~/Work/ai-stack/supermemory/mcp-shim.js
+```
+
+The shim follows the container tag algorithm of plugin version 0.1.8. If a plugin update changes that algorithm, the tools and the hooks see different containers: compare the `whoAmI` container with the tag in `/supermemory:status`.
 
 ---
 
@@ -474,7 +501,8 @@ Logs: `docker compose logs -f supermemory` (diagnostics are there too: `docker c
 | `llama-server process has terminated: signal: killed` while loading a model | Out of memory in WSL2: the WSL memory limit is too small (check `memory=` in `~/.wslconfig`; the default is 50% of RAM). After editing it, `wsl --shutdown` stops all Docker containers, including other projects'. |
 | `redirect target not allowed ... resolves to non-public 198.18.x.x` on `ollama pull` | A VPN/proxy with fake-IP DNS. Add `registry.ollama.ai` and `*.r2.cloudflarestorage.com` to the exclusions or turn the VPN off while downloading. |
 | `Authentication timed out` / `console.supermemory.ai` opened in Claude Code | The environment variables are not visible to the process. Restart the terminal and Claude Code completely. |
-| `-32001 Supermemory is not authenticated` in `/mcp` | The plugin's MCP points to the cloud, see section 5.3. |
+| `plugin:supermemory:supermemory` failed or `-32001 Supermemory is not authenticated` in `/mcp` | The plugin's MCP points to the cloud. Disable it and use the local shim, see section 5.3. |
+| `supermemory` shim connected, but tools return `SUPERMEMORY_CC_API_KEY is not set` or `401` | Claude Code was started without the environment variables of section 5.2. Restart the terminal and Claude Code. |
 | A model in `ollama ps` is not `100% GPU` | Not enough VRAM. Close other GPU users (LM Studio) or take a smaller quantization. |
 | Port 6767 is in use | The local `supermemory-server.exe` is running on Windows (`supermemory-start`). Stop it (`supermemory-stop`). |
 | The containers stopped by themselves | Check `docker events --since 10m` and whether Docker Desktop restarted. All services have `restart: unless-stopped`. |

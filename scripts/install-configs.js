@@ -17,7 +17,11 @@
 //      copy of its own (an old managed block in ~/.config/opencode/AGENTS.md is removed).
 //   6. Removes entries that earlier point at this repository (references by path),
 //      because the files are copied now.
+//   7. Copies supermemory/mcp-shim.js into <claude dir>/mcp/supermemory/ and registers it as the
+//      user-scope MCP server "supermemory" through `claude mcp add` (skipped with a hint when
+//      the `claude` CLI is not on PATH).
 
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -181,6 +185,38 @@ upsertBlock(path.join(claudeDir, 'CLAUDE.md'), '~/.claude/CLAUDE.md (managed blo
 // opencode needs no copy of the rules: with no ~/.config/opencode/AGENTS.md it falls back to
 // ~/.claude/CLAUDE.md, so there is one global source. Remove a block left by earlier runs.
 removeBlock(path.join(opencodeDir, 'AGENTS.md'), '~/.config/opencode/AGENTS.md (managed block removed)');
+
+// ---- 5. supermemory MCP shim ------------------------------------------------
+// The plugin's own MCP server talks to the cloud. The shim serves the same tools from the local
+// server. User-scope servers live in ~/.claude.json, which Claude Code rewrites itself, so the
+// registration goes through the CLI and not through a direct edit of that file.
+{
+  const shim = path.join(claudeDir, 'mcp', 'supermemory', 'mcp-shim.js');
+  copy(path.join(repo, 'supermemory', 'mcp-shim.js'), shim, '~/.claude/mcp/supermemory/mcp-shim.js');
+
+  const shimArg = toSlash(shim);
+  const win = process.platform === 'win32';
+  // On Windows `claude` may be a .cmd shim, which needs a shell: build one quoted command line.
+  const claude = (args) => (win
+    ? spawnSync(['claude', ...args.map((a) => (/\s/.test(a) ? `"${a}"` : a))].join(' '), { encoding: 'utf8', shell: true })
+    : spawnSync('claude', args, { encoding: 'utf8' }));
+  const label = 'MCP server "supermemory" (claude mcp, user scope)';
+  const current = claude(['mcp', 'get', 'supermemory']);
+
+  if (current.error) {
+    changes.push(`skipped    ${label}: claude CLI not found. Run: claude mcp add --scope user supermemory -- node "${shimArg}"`);
+  } else if (current.status === 0 && current.stdout.includes(shimArg)) {
+    changes.push(`unchanged  ${label}`);
+  } else {
+    const exists = current.status === 0;
+    changes.push(`${exists ? 'update   ' : 'create   '} ${label}`);
+    if (!dry) {
+      if (exists) claude(['mcp', 'remove', '--scope', 'user', 'supermemory']);
+      const added = claude(['mcp', 'add', '--scope', 'user', 'supermemory', '--', 'node', shimArg]);
+      if (added.status !== 0) changes.push(`failed     ${label}: ${(added.stderr || added.stdout || '').trim()}`);
+    }
+  }
+}
 
 // ---- report -----------------------------------------------------------------
 console.log(dry ? 'DRY RUN (nothing written)' : 'Installed');
